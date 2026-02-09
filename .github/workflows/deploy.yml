@@ -64,12 +64,19 @@ jobs:
         run: |
           echo "=== 使用github-runner用户的密钥 ==="
 
+          # 显式设置HOME变量
+          export HOME=/home/$(whoami) 2>/dev/null || export HOME=/root
+          echo "设置HOME: $HOME"
+
           # 1. 确定密钥源
           SOURCE_KEY="/home/github-runner/.ssh/id_ed25519"
           TARGET_KEY="$HOME/.ssh/deploy_key"
 
           echo "源密钥: $SOURCE_KEY"
           echo "目标密钥: $TARGET_KEY"
+
+          # 2. 创建目录（确保父目录存在）
+          mkdir -p "$(dirname "$TARGET_KEY")"
 
           # 2. 复制密钥
           mkdir -p ~/.ssh
