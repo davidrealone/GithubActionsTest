@@ -1,7 +1,3 @@
-# Test deployment
-
-这里做一些改动提交
-
 # GithubActionsTest
 
 This template should help get you started developing with Vue 3 in Vite.
