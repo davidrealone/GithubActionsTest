@@ -23,9 +23,6 @@ importers:
 
   .:
     dependencies:
-      jiti:
-        specifier: ^2.6.1
-        version: 2.6.1
       pinia:
         specifier: ^3.0.4
         version: 3.0.4(typescript@5.9.3)(vue@3.6.0-beta.5(typescript@5.9.3))
@@ -5084,7 +5081,8 @@ snapshots:
     optionalDependencies:
       '@pkgjs/parseargs': 0.11.0
 
-  jiti@2.6.1: {}
+  jiti@2.6.1:
+    optional: true
 
   joi@18.0.2:
     dependencies:
