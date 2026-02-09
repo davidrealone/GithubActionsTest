@@ -102,7 +102,7 @@ jobs:
 
           # 5. 配置SSH
           cat > ~/.ssh/config << 'EOF'
-          Host deploy-target
+          Host 192.168.1.78
             HostName 192.168.1.78
             User fuint
             IdentityFile $TARGET_KEY
@@ -113,7 +113,7 @@ jobs:
 
           # 6. 测试连接
           echo "测试连接..."
-          ssh deploy-target "echo '✅ SSH连接成功'"
+          ssh 192.168.1.78 "echo '✅ SSH连接成功'"
 
       - name: Deploy files
         env:
@@ -123,7 +123,7 @@ jobs:
           echo "目标路径: $DEPLOY_PATH"
 
           # 确保目标目录存在
-          ssh deploy-target "mkdir -p $DEPLOY_PATH"
+          ssh 192.168.1.78 "mkdir -p $DEPLOY_PATH"
 
           # 使用rsync部署
           echo "同步文件中..."
@@ -132,7 +132,7 @@ jobs:
             --exclude='.git*' \
             --exclude='*.log' \
             ./ \
-            deploy-target:$DEPLOY_PATH/
+            192.168.1.78:$DEPLOY_PATH/
 
           echo "✅ 文件同步完成"
 
@@ -141,7 +141,7 @@ jobs:
           echo "=== 部署验证 ==="
 
           # 验证文件数量和大小
-          ssh deploy-target "
+          ssh 192.168.1.78 "
             echo '目标目录: /home/fuint/frontsite'
             echo '目录大小:'
             du -sh /home/fuint/frontsite
