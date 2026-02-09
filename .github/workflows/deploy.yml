@@ -60,60 +60,133 @@ jobs:
           ls -la
           echo "文件总数：$(find . -type f | wc -l)"
 
-      - name: Setup SSH using github-runner's key
+      - name: Setup SSH Configuration
         run: |
-          echo "=== 使用github-runner用户的密钥 ==="
+          echo "=== 配置SSH连接 ==="
 
-          # 显式设置HOME变量
-          export HOME=/home/$(whoami) 2>/dev/null || export HOME=/root
-          echo "设置HOME: $HOME"
+          # 获取当前用户信息
+          CURRENT_USER=$(whoami)
+          echo "当前执行用户: $CURRENT_USER"
 
-          # 1. 确定密钥源
-          SOURCE_KEY="/home/github-runner/.ssh/id_ed25519"
-          TARGET_KEY="$HOME/.ssh/deploy_key"
-
-          echo "源密钥: $SOURCE_KEY"
-          echo "目标密钥: $TARGET_KEY"
-
-          # 2. 创建目录（确保父目录存在）
-          mkdir -p "$(dirname "$TARGET_KEY")"
-
-          # 2. 复制密钥
-          mkdir -p ~/.ssh
-          if [ -f "$SOURCE_KEY" ]; then
-            echo "复制github-runner的密钥..."
-            cp "$SOURCE_KEY" "$TARGET_KEY"
+          # 设置正确的HOME目录
+          if [ "$CURRENT_USER" = "root" ]; then
+            export HOME=/root
           else
-            echo "使用GitHub Secrets的密钥..."
-            cat > "$TARGET_KEY" << 'EOF'
-          ${{ secrets.DEPLOY_SSH_KEY }}
-          EOF
+            export HOME=/home/$CURRENT_USER
+          fi
+          echo "HOME目录: $HOME"
+
+          # 创建SSH目录
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          # 清理旧的密钥文件
+          rm -f ~/.ssh/id_ed25519 ~/.ssh/id_ed25519.pub ~/.ssh/deploy_key
+
+          # 尝试使用github-runner的密钥
+          RUNNER_KEY="/home/github-runner/.ssh/id_ed25519"
+          RUNNER_PUB_KEY="/home/github-runner/.ssh/id_ed25519.pub"
+
+          echo "检查github-runner密钥..."
+          if [ -f "$RUNNER_KEY" ] && [ -f "$RUNNER_PUB_KEY" ]; then
+            echo "使用github-runner的SSH密钥对"
+            # 复制私钥
+            cp "$RUNNER_KEY" ~/.ssh/id_ed25519
+            # 复制公钥
+            cp "$RUNNER_PUB_KEY" ~/.ssh/id_ed25519.pub
+            chmod 600 ~/.ssh/id_ed25519
+            chmod 644 ~/.ssh/id_ed25519.pub
+            
+            # 显示公钥（用于目标服务器配置）
+            echo "公钥内容（需要在目标服务器添加到此文件）:"
+            echo "~/.ssh/authorized_keys"
+            cat ~/.ssh/id_ed25519.pub
+          else
+            echo "使用GitHub Secrets的SSH密钥"
+            # 从GitHub Secrets读取私钥
+            echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+            chmod 600 ~/.ssh/id_ed25519
+            
+            # 如果有公钥Secret，也使用它
+            if [ -n "${{ secrets.DEPLOY_SSH_PUB_KEY }}" ]; then
+              echo "${{ secrets.DEPLOY_SSH_PUB_KEY }}" > ~/.ssh/id_ed25519.pub
+              chmod 644 ~/.ssh/id_ed25519.pub
+            else
+              # 从私钥生成公钥
+              ssh-keygen -y -f ~/.ssh/id_ed25519 > ~/.ssh/id_ed25519.pub 2>/dev/null || true
+            fi
           fi
 
-          # 3. 设置权限
-          chmod 600 "$TARGET_KEY"
-
-          # 4. 验证密钥
-          echo "验证密钥..."
-          ssh-keygen -l -f "$TARGET_KEY" 2>/dev/null || {
-            echo "❌ 密钥无效"
+          # 验证密钥
+          echo "验证SSH密钥..."
+          if [ -f ~/.ssh/id_ed25519 ]; then
+            KEY_FINGERPRINT=$(ssh-keygen -l -f ~/.ssh/id_ed25519 2>/dev/null || echo "无法读取密钥")
+            echo "密钥指纹: $KEY_FINGERPRINT"
+          else
+            echo "❌ 错误: 没有找到SSH私钥"
             exit 1
-          }
+          fi
 
-          # 5. 配置SSH
+          # 创建SSH配置文件
           cat > ~/.ssh/config << 'EOF'
-          Host 192.168.1.78
+          Host deploy-production
             HostName 192.168.1.78
             User fuint
-            IdentityFile $TARGET_KEY
+            Port 22
+            IdentityFile ~/.ssh/id_ed25519
             StrictHostKeyChecking no
-            ConnectTimeout 10
+            UserKnownHostsFile /dev/null
+            ConnectTimeout 30
+            ServerAliveInterval 60
+            ServerAliveCountMax 3
             IdentitiesOnly yes
+            PreferredAuthentications publickey
+            LogLevel INFO
           EOF
 
-          # 6. 测试连接
-          echo "测试连接..."
-          ssh 192.168.1.78 "echo '✅ SSH连接成功'"
+          chmod 600 ~/.ssh/config
+
+          echo "SSH配置完成"
+          echo "配置文件内容:"
+          cat ~/.ssh/config
+
+      - name: Test SSH Connection
+        run: |
+          echo "=== 测试SSH连接 ==="
+
+          # 显示连接信息
+          echo "连接信息:"
+          echo "目标主机: 192.168.1.78"
+          echo "目标用户: fuint"
+          echo "使用密钥: ~/.ssh/id_ed25519"
+
+          # 第一次测试（可能较慢）
+          echo "正在进行SSH连接测试..."
+
+          # 使用详细模式测试连接
+          CONNECT_RESULT=$(ssh -T deploy-production "echo 'SSH连接成功'" 2>&1)
+          CONNECT_EXIT_CODE=$?
+
+          if [ $CONNECT_EXIT_CODE -eq 0 ]; then
+            echo "✅ SSH连接测试成功"
+            echo "输出: $CONNECT_RESULT"
+          else
+            echo "❌ SSH连接测试失败"
+            echo "错误代码: $CONNECT_EXIT_CODE"
+            echo "错误信息:"
+            echo "$CONNECT_RESULT"
+            
+            # 尝试更详细的调试
+            echo "=== 详细调试信息 ==="
+            ssh -vvv -T deploy-production "exit" 2>&1 | tail -20
+            
+            # 检查是否需要添加公钥到目标服务器
+            echo ""
+            echo "⚠️ 可能需要将以下公钥添加到目标服务器的 authorized_keys:"
+            cat ~/.ssh/id_ed25519.pub 2>/dev/null || echo "无法读取公钥"
+            
+            exit 1
+          fi
 
       - name: Deploy files
         env:
@@ -123,40 +196,70 @@ jobs:
           echo "目标路径: $DEPLOY_PATH"
 
           # 确保目标目录存在
-          ssh 192.168.1.78 "mkdir -p $DEPLOY_PATH"
+          echo "创建目标目录..."
+          ssh deploy-production "mkdir -p $DEPLOY_PATH"
 
-          # 使用rsync部署
-          echo "同步文件中..."
+          # 显示同步前状态
+          echo "同步前目标目录状态:"
+          ssh deploy-production "ls -la $DEPLOY_PATH/ | head -10"
+
+          # 使用rsync部署（详细模式）
+          echo "使用rsync同步文件中..."
           rsync -avz --progress --delete \
             -e "ssh -F ~/.ssh/config" \
             --exclude='.git*' \
             --exclude='*.log' \
+            --exclude='node_modules' \
+            --exclude='.env*' \
+            --exclude='*.map' \
             ./ \
-            192.168.1.78:$DEPLOY_PATH/
+            deploy-production:$DEPLOY_PATH/
 
-          echo "✅ 文件同步完成"
+          # 检查rsync退出状态
+          RSYNC_EXIT_CODE=$?
+          if [ $RSYNC_EXIT_CODE -eq 0 ]; then
+            echo "✅ 文件同步完成"
+          else
+            echo "❌ 文件同步失败，退出代码: $RSYNC_EXIT_CODE"
+            exit $RSYNC_EXIT_CODE
+          fi
 
       - name: Verify deployment
         run: |
           echo "=== 部署验证 ==="
 
-          # 验证文件数量和大小
-          ssh 192.168.1.78 "
+          ssh deploy-production "
             echo '目标目录: /home/fuint/frontsite'
+            echo ''
             echo '目录大小:'
             du -sh /home/fuint/frontsite
             echo ''
-            echo '文件数量:'
+            echo '文件数量统计:'
             find /home/fuint/frontsite -type f | wc -l
             echo ''
-            echo '前5个文件:'
-            ls -la /home/fuint/frontsite/ | head -6
+            echo '目录结构(前20个):'
+            ls -la /home/fuint/frontsite/ | head -21
+            echo ''
+            echo '构建产物验证:'
+            if [ -d '/home/fuint/frontsite/dist' ]; then
+              echo '✅ dist目录存在'
+              ls -la /home/fuint/frontsite/dist/ | head -6
+            else
+              echo '❌ dist目录不存在'
+            fi
           "
 
           echo "✅ 部署验证完成"
 
-      - name: Deployment success notification
+      - name: Post-deployment tasks
         run: |
+          echo "=== 部署后任务 ==="
+
+          # 示例：如果需要重启服务或执行其他命令
+          # ssh deploy-production "cd /home/fuint/frontsite && pm2 reload frontsite || pm2 start npm --name 'frontsite' -- start"
+
           echo "🎉 CI/CD 部署成功完成！"
           echo "项目已部署到: 192.168.1.78:/home/fuint/frontsite"
-          echo "时间: $(date)"
+          echo "部署时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "Commit: ${{ github.sha }}"
+          echo "分支: ${{ github.ref }}"
