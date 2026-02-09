@@ -32,6 +32,8 @@ jobs:
           pnpm run build
           echo "构建完成，产物大小："
           du -sh dist/ || true
+          echo "dist目录内容："
+          ls -la dist/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -54,152 +56,104 @@ jobs:
         with:
           name: production-build
 
-      - name: Verify artifacts
+      - name: Verify build artifacts
         run: |
-          echo "下载的产物内容："
-          ls -la
-          echo "文件总数：$(find . -type f | wc -l)"
+          echo "验证构建产物..."
+          if [ ! -d "./dist" ]; then
+            echo "❌ 错误: dist目录不存在"
+            exit 1
+          fi
+
+          echo "dist目录内容:"
+          ls -la dist/
+          echo "HTML文件: $(find dist/ -name '*.html' | wc -l)个"
+          echo "JS文件: $(find dist/ -name '*.js' | wc -l)个"
+          echo "CSS文件: $(find dist/ -name '*.css' | wc -l)个"
 
       - name: Setup SSH Connection
         run: |
           echo "=== 配置SSH连接 ==="
 
-          # 显示当前用户信息
           CURRENT_USER=$(whoami)
           echo "当前用户: $CURRENT_USER"
 
-          # 设置HOME目录
           if [ "$CURRENT_USER" = "root" ]; then
             export HOME=/root
           else
             export HOME=/home/$CURRENT_USER
           fi
-          echo "HOME目录: $HOME"
 
-          # 创建SSH目录
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
 
-          # 清理可能存在的旧配置
           rm -f ~/.ssh/id_ed25519 ~/.ssh/id_ed25519.pub ~/.ssh/config
 
-          # 直接使用github-runner的密钥（已验证有效的）
-          echo "复制github-runner的SSH密钥..."
           cp /home/github-runner/.ssh/id_ed25519 ~/.ssh/
           cp /home/github-runner/.ssh/id_ed25519.pub ~/.ssh/
           chmod 600 ~/.ssh/id_ed25519
           chmod 644 ~/.ssh/id_ed25519.pub
 
-          # 显示正在使用的公钥
-          echo "使用的公钥指纹:"
-          ssh-keygen -l -f ~/.ssh/id_ed25519
-
-          # 创建简化的SSH配置文件
           cat > ~/.ssh/config << 'EOF'
           Host 192.168.1.78
             HostName 192.168.1.78
             User fuint
             IdentityFile ~/.ssh/id_ed25519
             StrictHostKeyChecking no
-            UserKnownHostsFile /dev/null
             ConnectTimeout 15
-            ServerAliveInterval 30
           EOF
 
           chmod 600 ~/.ssh/config
 
-          echo "SSH配置完成"
-
       - name: Test SSH Connection
         run: |
-          echo "=== 测试SSH连接 ==="
-
-          # 简单测试连接
-          echo "测试到 192.168.1.78 的连接..."
-          if ssh -o ConnectTimeout=10 192.168.1.78 "echo '✅ SSH连接成功'"; then
-            echo "✅ SSH连接测试通过"
+          echo "测试SSH连接..."
+          if ssh -o ConnectTimeout=10 192.168.1.78 "echo '✅ 连接成功'"; then
+            echo "✅ SSH连接正常"
           else
             echo "❌ SSH连接失败"
-            
-            # 显示调试信息
-            echo ""
-            echo "=== 调试信息 ==="
-            echo "当前目录: $(pwd)"
-            echo "用户: $(whoami)"
-            echo ""
-            echo "密钥文件:"
-            ls -la ~/.ssh/
-            echo ""
-            echo "公钥内容（请确认目标服务器已添加此公钥）:"
-            cat ~/.ssh/id_ed25519.pub
-            
             exit 1
           fi
 
-      - name: Deploy files
+      - name: Deploy dist directory
         env:
           DEPLOY_PATH: /home/fuint/frontsite
         run: |
-          echo "开始部署到目标服务器..."
-          echo "目标路径: $DEPLOY_PATH"
+          echo "=== 部署dist目录 ==="
+          echo "目标: $DEPLOY_PATH"
 
-          # 确保目标目录存在
-          echo "检查/创建目标目录..."
+          # 检查目标目录是否存在，不存在则创建
           ssh 192.168.1.78 "mkdir -p $DEPLOY_PATH"
 
-          # 显示部署前状态
-          echo "部署前目录状态:"
-          ssh 192.168.1.78 "ls -la $DEPLOY_PATH/ 2>/dev/null | head -5 || echo '目录为空或不存在'"
-
-          # 使用rsync部署
-          echo "使用rsync同步文件..."
+          echo "开始同步dist目录..."
           rsync -avz --progress --delete \
-            --exclude='.git*' \
-            --exclude='*.log' \
-            --exclude='node_modules' \
-            --exclude='.env*' \
             --exclude='*.map' \
-            ./ \
+            dist/ \
             fuint@192.168.1.78:$DEPLOY_PATH/
 
-          echo "✅ 文件同步完成"
-
-          # 显示部署后状态
-          echo "部署后目录状态:"
-          ssh 192.168.1.78 "ls -la $DEPLOY_PATH/ | head -10"
+          echo "✅ 部署完成"
 
       - name: Verify deployment
         run: |
           echo "=== 部署验证 ==="
 
           ssh 192.168.1.78 "
-            echo '部署验证信息:'
+            echo '目标服务器验证:'
             echo '================'
             echo '目录: /home/fuint/frontsite'
+            echo '大小: \$(du -sh /home/fuint/frontsite)'
+            echo '文件数: \$(find /home/fuint/frontsite -type f | wc -l)'
             echo ''
-            echo '目录大小:'
-            du -sh /home/fuint/frontsite
-            echo ''
-            echo '文件数量:'
-            find /home/fuint/frontsite -type f | wc -l
-            echo ''
-            echo 'dist目录内容:'
-            if [ -d '/home/fuint/frontsite/dist' ]; then
-              echo '✅ dist目录存在'
-              echo '文件数量:' \$(find /home/fuint/frontsite/dist -type f | wc -l)
-              echo '主要文件:'
-              ls -la /home/fuint/frontsite/dist/ | head -10
-            else
-              echo '❌ dist目录不存在'
-            fi
+            echo '关键文件检查:'
+            [ -f '/home/fuint/frontsite/index.html' ] && echo '✅ index.html 存在' || echo '❌ index.html 缺失'
+            [ -f '/home/fuint/frontsite/favicon.ico' ] && echo '✅ favicon.ico 存在' || echo '⚠️  favicon.ico 缺失'
+            [ -f '/home/fuint/frontsite/main.js' ] && echo '✅ main.js 存在' || echo '⚠️  main.js 缺失'
+            [ -f '/home/fuint/frontsite/main.css' ] && echo '✅ main.css 存在' || echo '⚠️  main.css 缺失'
           "
 
-          echo "✅ 部署验证完成"
+          echo "✅ 验证完成"
 
-      - name: Post-deployment tasks
+      - name: Deployment success
         run: |
-          echo "=== 部署成功 ==="
-          echo "🎉 CI/CD 部署成功完成！"
-          echo "项目已部署到: 192.168.1.78:/home/fuint/frontsite"
-          echo "部署时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🎉 部署成功！"
+          echo "时间: $(date)"
           echo "Commit: ${{ github.sha }}"
