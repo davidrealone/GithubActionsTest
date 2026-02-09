@@ -24,7 +24,7 @@ jobs:
           echo "依赖安装完成"
       
       - name: Run tests
-        run: npm test
+        run: npm test:unit
         env:
           CI: true
       
