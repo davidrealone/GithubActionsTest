@@ -24,13 +24,13 @@ jobs:
           echo "依赖安装完成"
       
       - name: Run tests
-        run: npm test:unit
+        run: pnpm run test:unit
         env:
           CI: true
       
       - name: Build project
         run: |
-          npm run build
+          pnpm run build
           echo "构建完成，产物大小："
           du -sh dist/ || true
       
