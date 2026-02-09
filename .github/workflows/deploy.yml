@@ -124,10 +124,14 @@ jobs:
           # 检查目标目录是否存在，不存在则创建
           ssh 192.168.1.78 "mkdir -p $DEPLOY_PATH"
 
-          echo "开始同步dist目录..."
-          rsync -avz --progress --delete \
+          # 清理旧的dist文件夹（可选，如果需要每次全新部署）
+          # ssh 192.168.1.78 "rm -rf $DEPLOY_PATH/dist 2>/dev/null || true"
+
+          echo "开始同步dist文件夹..."
+          # 【关键修改点：dist 后面没有斜杠，这样会同步整个dist文件夹】
+          rsync -avz --progress \
             --exclude='*.map' \
-            dist/ \
+            dist \  # ← 注意：这里没有斜杠，同步整个dist文件夹
             fuint@192.168.1.78:$DEPLOY_PATH/
 
           echo "✅ 部署完成"
@@ -139,15 +143,28 @@ jobs:
           ssh 192.168.1.78 "
             echo '目标服务器验证:'
             echo '================'
-            echo '目录: /home/fuint/frontsite'
-            echo '大小: \$(du -sh /home/fuint/frontsite)'
-            echo '文件数: \$(find /home/fuint/frontsite -type f | wc -l)'
+            echo '目录结构:'
+            echo '/home/fuint/frontsite/'
+            ls -la /home/fuint/frontsite/
+            echo ''
+            echo 'dist目录内容:'
+            ls -la /home/fuint/frontsite/dist/
+            echo ''
+            echo '文件统计:'
+            echo 'dist目录大小: \$(du -sh /home/fuint/frontsite/dist/)'
+            echo 'dist目录文件数: \$(find /home/fuint/frontsite/dist -type f | wc -l)'
             echo ''
             echo '关键文件检查:'
-            [ -f '/home/fuint/frontsite/index.html' ] && echo '✅ index.html 存在' || echo '❌ index.html 缺失'
-            [ -f '/home/fuint/frontsite/favicon.ico' ] && echo '✅ favicon.ico 存在' || echo '⚠️  favicon.ico 缺失'
-            [ -f '/home/fuint/frontsite/main.js' ] && echo '✅ main.js 存在' || echo '⚠️  main.js 缺失'
-            [ -f '/home/fuint/frontsite/main.css' ] && echo '✅ main.css 存在' || echo '⚠️  main.css 缺失'
+            # 【相应修改：文件路径加上 dist/ 前缀】
+            if [ -d '/home/fuint/frontsite/dist' ]; then
+              [ -f '/home/fuint/frontsite/dist/index.html' ] && echo '✅ index.html 存在' || echo '❌ index.html 缺失'
+              [ -f '/home/fuint/frontsite/dist/favicon.ico' ] && echo '✅ favicon.ico 存在' || echo '⚠️  favicon.ico 缺失'
+              echo 'HTML文件数: \$(find /home/fuint/frontsite/dist -name \"*.html\" | wc -l)'
+              echo 'JS文件数: \$(find /home/fuint/frontsite/dist -name \"*.js\" | wc -l)'
+              echo 'CSS文件数: \$(find /home/fuint/frontsite/dist -name \"*.css\" | wc -l)'
+            else
+              echo '❌ dist目录不存在'
+            fi
           "
 
           echo "✅ 验证完成"
@@ -155,5 +172,6 @@ jobs:
       - name: Deployment success
         run: |
           echo "🎉 部署成功！"
-          echo "时间: $(date)"
+          echo "项目已部署到: 192.168.1.78:/home/fuint/frontsite/dist/"
+          echo "部署时间: $(date)"
           echo "Commit: ${{ github.sha }}"
