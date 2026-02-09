@@ -1,46 +1,46 @@
 name: CI/CD Pipeline
 on:
   push:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   build-test:
     name: Build and Test
     runs-on: self-hosted
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'pnpm'
-      
+
       - name: Install dependencies
         run: |
           pnpm install
           echo "依赖安装完成"
-      
+
       - name: Run tests
         run: pnpm run test:unit
         env:
           CI: true
-      
+
       - name: Build project
         run: |
           pnpm run build
           echo "构建完成，产物大小："
           du -sh dist/ || true
-      
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: production-build
           path: |
             dist/
-            !dist/**/*.map  # 排除source maps
+            !dist/**/*.map
           retention-days: 7
 
   deploy:
@@ -48,31 +48,74 @@ jobs:
     needs: build-test
     runs-on: self-hosted
     if: github.ref == 'refs/heads/main'
-    
+
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           name: production-build
-      
+
       - name: Verify artifacts
         run: |
           echo "下载的产物内容："
           ls -la
           echo "文件总数：$(find . -type f | wc -l)"
-      
-      - name: Setup SSH
+
+      - name: Setup and Verify SSH Key
+        id: ssh-setup
         run: |
+          echo "=== 配置并验证SSH密钥 ==="
+
+          # 1. 创建目录
           mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 700 ~/.ssh
+
+          # 2. 写入私钥
+          echo "写入私钥文件..."
+          cat > ~/.ssh/id_ed25519 << 'EOF'
+          ${{ secrets.DEPLOY_SSH_KEY }}
+          EOF
+
+          # 3. 验证私钥格式
+          KEY_LINES=$(wc -l < ~/.ssh/id_ed25519)
+          echo "私钥行数: $KEY_LINES"
+
+          if [ $KEY_LINES -lt 5 ]; then
+            echo "❌ 错误：私钥过短，可能格式错误"
+            exit 1
+          fi
+
+          # 4. 验证密钥有效性
+          echo "验证密钥有效性..."
+          if ssh-keygen -l -f ~/.ssh/id_ed25519 2>/dev/null; then
+            echo "✅ 私钥格式有效"
+          else
+            echo "❌ 私钥格式无效"
+            exit 1
+          fi
+
+          # 5. 设置权限
           chmod 600 ~/.ssh/id_ed25519
-          
-          # 禁用主机密钥检查（内网环境）
-          echo -e "Host 192.168.1.78\n\tStrictHostKeyChecking no\n\tUserKnownHostsFile /dev/null" > ~/.ssh/config
-          
-          # 测试连接
-          ssh -o ConnectTimeout=5 fuint@192.168.1.78 "echo 'SSH连接测试成功'" || true
-      
+
+          # 6. 配置SSH
+          cat > ~/.ssh/config << 'EOF'
+            Host 192.168.1.78
+            HostName 192.168.1.78
+            User fuint
+            IdentityFile ~/.ssh/id_ed25519
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ConnectTimeout 10
+          EOF
+
+          # 7. 首次连接测试
+          echo "首次SSH连接测试..."
+          ssh -o ConnectTimeout=5 fuint@192.168.1.78 "echo '✅ 基础连接测试成功'" || {
+            echo "⚠️ 首次连接可能失败，继续执行..."
+          }
+
+          echo "SSH配置完成"
+
       - name: Deploy files
         env:
           DEPLOY_HOST: 192.168.1.78
@@ -80,19 +123,23 @@ jobs:
           DEPLOY_PATH: /home/fuint/frontsite
         run: |
           echo "开始部署到 $DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH"
-          
-          # 使用rsync同步，只传输变化的文件
+
+          # 确保目标目录存在
+          ssh -i ~/.ssh/id_ed25519 $DEPLOY_USER@$DEPLOY_HOST "mkdir -p $DEPLOY_PATH"
+
+          # 使用rsync同步
           rsync -avz --delete \
+            -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
             --exclude='.git*' \
             --exclude='*.log' \
             ./ \
             $DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/
-          
+
           echo "文件同步完成"
-      
+
       - name: Post-deployment verification
         run: |
-          ssh fuint@192.168.1.78 "
+          ssh -i ~/.ssh/id_ed25519 fuint@192.168.1.78 "
             echo '=== 部署验证 ==='
             echo '目标目录: $DEPLOY_PATH'
             echo '目录大小:'
@@ -103,7 +150,7 @@ jobs:
             echo ''
             echo '部署时间: $(date)'
           "
-          
+
       - name: Notification
         run: |
           echo "🎉 部署完成！"
